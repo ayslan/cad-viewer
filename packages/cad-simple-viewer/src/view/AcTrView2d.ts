@@ -20,6 +20,8 @@ import { AcDbSystemVariables } from '@mlightcad/data-model'
 import {
   AcTrEntity,
   AcTrGroup,
+  AcTrLine,
+  AcTrMText,
   AcTrRenderer,
   AcTrViewportView
 } from '@mlightcad/three-renderer'
@@ -113,6 +115,8 @@ export class AcTrView2d extends AcEdBaseView {
   private _missedImages: Map<AcDbObjectId, string>
   /** The number of entities waiting for processing */
   private _numOfEntitiesToProcess: number
+  /** Map of AcTrMText entities for dynamic color updates */
+  private _mtextEntities: Map<AcDbObjectId, AcTrMText | AcTrLine>
 
   /**
    * Creates a new 2D CAD viewer instance.
@@ -163,7 +167,10 @@ export class AcTrView2d extends AcEdBaseView {
     AcDbSysVarManager.instance().events.sysVarChanged.addEventListener(args => {
       if (args.name === AcDbSystemVariables.WHITEBKCOLOR.toLowerCase()) {
         const useWhiteBackgroundColor = args.newVal as boolean
-        this.backgroundColor = useWhiteBackgroundColor ? 0xffffff : 0
+        const newBackgroundColor = useWhiteBackgroundColor ? 0xffffff : 0
+        this.backgroundColor = newBackgroundColor
+        // Dynamically update text colors without regeneration
+        this.updateTextColorsForBackground(newBackgroundColor)
       }
     })
 
@@ -203,6 +210,7 @@ export class AcTrView2d extends AcEdBaseView {
     )
 
     this._missedImages = new Map()
+    this._mtextEntities = new Map()
     this._layoutViewManager = new AcTrLayoutViewManager()
     this.initialize()
     this.onWindowResize()
@@ -587,6 +595,10 @@ export class AcTrView2d extends AcEdBaseView {
       const threeEntity: AcTrEntity | null = this.drawEntity(entity, true)
       if (threeEntity) {
         threeEntity.objectId = entity.objectId
+        // Track AcTrMText and AcTrLine entities for dynamic color updates
+        if (threeEntity instanceof AcTrMText || threeEntity instanceof AcTrLine) {
+          this._mtextEntities.set(entity.objectId, threeEntity)
+        }
         this._scene.addTransientEntity(threeEntity)
         this._isDirty = true
       }
@@ -598,6 +610,12 @@ export class AcTrView2d extends AcEdBaseView {
    * @param objectId Input the object id of the transient entity to remove
    */
   removeTransientEntity(objectId: AcDbObjectId) {
+    // Dispose and remove tracked AcTrMText entity
+    const mtextEntity = this._mtextEntities.get(objectId)
+    if (mtextEntity) {
+      mtextEntity.dispose()
+      this._mtextEntities.delete(objectId)
+    }
     this._scene.removeTransientEntity(objectId)
     this._isDirty = true
   }
@@ -619,7 +637,15 @@ export class AcTrView2d extends AcEdBaseView {
    */
   removeEntity(entity: AcDbEntity | AcDbEntity[]) {
     const entities = Array.isArray(entity) ? entity : [entity]
-    entities.forEach(entity => this._scene.removeEntity(entity.objectId))
+    entities.forEach(entity => {
+      // Dispose and remove tracked AcTrMText entity
+      const mtextEntity = this._mtextEntities.get(entity.objectId)
+      if (mtextEntity) {
+        mtextEntity.dispose()
+        this._mtextEntities.delete(entity.objectId)
+      }
+      this._scene.removeEntity(entity.objectId)
+    })
     this._isDirty = true
   }
 
@@ -642,6 +668,19 @@ export class AcTrView2d extends AcEdBaseView {
         threeEntity.ownerId = entity.ownerId
         threeEntity.layerName = entity.layer
         threeEntity.visible = entity.visibility
+        
+        // Update tracked AcTrMText entity if applicable
+        const oldMtextEntity = this._mtextEntities.get(entity.objectId)
+        if (oldMtextEntity) {
+          oldMtextEntity.dispose()
+        }
+        if (threeEntity instanceof AcTrMText || threeEntity instanceof AcTrLine) {
+          this._mtextEntities.set(entity.objectId, threeEntity)
+        } else if (oldMtextEntity) {
+          // Entity changed from MText or Line to non-MText/Line
+          this._mtextEntities.delete(entity.objectId)
+        }
+        
         this._scene.updateEntity(threeEntity)
       }
     }
@@ -666,6 +705,9 @@ export class AcTrView2d extends AcEdBaseView {
    * @inheritdoc
    */
   clear() {
+    // Dispose all tracked AcTrMText entities
+    this._mtextEntities.forEach(mtextEntity => mtextEntity.dispose())
+    this._mtextEntities.clear()
     this._scene.clear()
     this._isDirty = true
     this._missedImages.clear()
@@ -729,6 +771,21 @@ export class AcTrView2d extends AcEdBaseView {
     super.onWindowResize()
     this._renderer.setSize(this.width, this.height)
     this._layoutViewManager.resize(this.width, this.height)
+    this._isDirty = true
+  }
+
+  /**
+   * Updates text entity colors dynamically when background changes.
+   * This iterates over tracked AcTrMText entities and updates their materials without regeneration.
+   */
+  private updateTextColorsForBackground(backgroundColor: number): void {
+    // console.log('Updating text colors for background color:', backgroundColor)
+    // console.log('Number of MText entities to update:', this._mtextEntities.size)
+
+    // Iterate over tracked AcTrMText entities
+    this._mtextEntities.forEach((mtextEntity) => {
+      mtextEntity.updateColorForBackground(backgroundColor)
+    })
     this._isDirty = true
   }
 
@@ -911,9 +968,15 @@ export class AcTrView2d extends AcEdBaseView {
           await threeEntity
             .draw()
             .then(() => {
+              // Track AcTrMText and AcTrLine entities before adding to scene (for dynamic color updates)
+              if (threeEntity instanceof AcTrMText || threeEntity instanceof AcTrLine) {
+                this._mtextEntities.set(threeEntity.objectId, threeEntity)
+              }
               this._scene.addEntity(threeEntity, isExtendBbox)
-              // Release memory occupied by this entity
-              threeEntity.dispose()
+              // Note: Don't dispose AcTrMText as we need to keep the reference for color updates
+              if (!(threeEntity instanceof AcTrMText)) {
+                threeEntity.dispose()
+              }
               this._isDirty = true
             })
             .finally(() => {

@@ -7,6 +7,8 @@ export const HIGHLIGHT_COLOR = new THREE.Color(0x08e8de)
 
 /**
  * Type for materials that have color property
+ * Note: LineMaterial from three/examples/jsm/lines is handled separately
+ * because it extends ShaderMaterial with custom color accessors
  */
 type MaterialWithColor =
   | THREE.PointsMaterial

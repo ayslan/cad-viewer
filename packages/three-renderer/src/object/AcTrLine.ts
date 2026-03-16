@@ -5,18 +5,31 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js'
 
 import { AcTrStyleManager } from '../style/AcTrStyleManager'
-import { AcTrBufferGeometryUtil } from '../util'
+import { AcTrBufferGeometryUtil, AcTrMaterialUtil } from '../util'
 import { AcTrEntity } from './AcTrEntity'
 
 export class AcTrLine extends AcTrEntity {
   public geometry: THREE.BufferGeometry | LineSegmentsGeometry
+  private _originalColor: number
+  private _traits: AcGiSubEntityTraits
 
   constructor(
     points: AcGePoint3dLike[],
     traits: AcGiSubEntityTraits,
-    styleManager: AcTrStyleManager
+    styleManager: AcTrStyleManager,
+    backgroundColor?: number
   ) {
     super(styleManager)
+    this._originalColor = traits.rgbColor
+    this._traits = traits
+
+    // Invert color if it matches background (white-on-white or black-on-black)
+    if (backgroundColor !== undefined) {
+      const color = traits.color.RGB ?? 0xffffff
+      if (color === backgroundColor && (color === 0xffffff || color === 0x000000)) {
+        traits.color.setRGBValue(color === 0xffffff ? 0x000000 : 0xffffff)
+      }
+    }
 
     const material = this.styleManager.getLineMaterial(traits)
     const maxVertexCount = points.length
@@ -82,6 +95,52 @@ export class AcTrLine extends AcTrEntity {
   private setBoundingBox(geometry: THREE.BufferGeometry) {
     geometry.computeBoundingBox()
     this.box = geometry.boundingBox!
+  }
+
+  updateColorForBackground(backgroundColor: number): void {
+    // Calculate what the color should be based on background
+    const shouldInvert =
+      (this._originalColor === 0xffffff && backgroundColor === 0xffffff) ||
+      (this._originalColor === 0x000000 && backgroundColor === 0x000000)
+
+    const finalColor = shouldInvert
+      ? (this._originalColor === 0xffffff ? 0x000000 : 0xffffff)
+      : this._originalColor
+
+    if (shouldInvert) {
+      // console.log('traits', this._traits)
+      const mat = this.styleManager.getLineMaterial(this._traits)
+      AcTrMaterialUtil.setMaterialColor(mat, new THREE.Color(finalColor))
+
+      if (mat instanceof LineMaterial)
+        mat.color.setHex(finalColor)
+    }
+
+    // Note: After flattening, this AcTrLine container may have no children
+    // (children moved to parent). In that case, this method won't update anything.
+    // The caller should either call this before flattening, or call updateMaterial
+    // on the parent container with the actual LineSegments children.
+
+    // Update all material colors in the line children
+    // this.traverse((object: THREE.Object3D) => {
+    //   console.log('Traversing AcTrLine object for color update:', object)
+    //   if ('material' in object && object.material) {
+    //     const material = object.material as THREE.Material | THREE.Material[]
+
+    //     // Handle both single material and material arrays
+    //     const materials = Array.isArray(material) ? material : [material]
+
+    //     materials.forEach((mat: THREE.Material) => {
+    //       // Handle LineMaterial from three/examples (has .color property)
+    //       if (mat instanceof LineMaterial) {
+    //         mat.color.setHex(finalColor)
+    //       } else {
+    //         // Handle other standard materials
+    //         AcTrMaterialUtil.setMaterialColor(mat, new THREE.Color(finalColor))
+    //       }
+    //     })
+    //   }
+    // })
   }
 }
 

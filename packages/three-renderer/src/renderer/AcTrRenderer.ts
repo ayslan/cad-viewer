@@ -320,7 +320,8 @@ export class AcTrRenderer implements AcGiRenderer<AcTrEntity> {
   }
 
   private linePoints(points: AcGePoint3dLike[]) {
-    return new AcTrLine(points, this._subEntityTraits, this._styleManager)
+    const backgroundColor = this.getClearColor()
+    return new AcTrLine(points, this._subEntityTraits, this._styleManager, backgroundColor)
   }
 
   /**
